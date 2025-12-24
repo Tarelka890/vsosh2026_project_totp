@@ -1,10 +1,11 @@
+#!/usr/bin/env python3
 import sys, getpass, subprocess, time, sqlite3
 from pathlib import Path
 import pyotp
 
-DB_PATH = Path('/var/lib/totp/secure_totp.db')
-MAX_TRIES = 3
-BLOCK_DURATION = 300
+DB_PATH = Path("/var/lib/risktotp/secure_totp.db")
+MAX_FAILS = 3
+BLOCK_SECONDS = 300
 
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -24,16 +25,63 @@ def init_db():
 
 def get_attempt(conn, user, action):
     c = conn.cursor()
-    c.execute("SELECT fail_count, last_fail_ts FROM attempts WHERE user=? and action=?", (user, action))
+    c.execute("SELECT fail_count, last_fail_ts FROM attempts WHERE user=? AND action=?",
+              (user, action))
     row = c.fetchone()
-    return (row[0], row[1]) if row else (0,0)
+    return (row[0], row[1]) if row else (0, 0)
 
-# def set_attempt(conn, user, action, fail, ts):
-#     c = conn.cursor()
-#     c.execute("""
-#         INSERT INTO attempts(user, action, fail_count, last_fail_ts)
-#         VALUES (?, ?, ?, ?)
-#         ON CONFLICT(user, action) DO UPDATE SET
-#             fail_count=excluded.fail_count,
-#             last_fail_ts=excluded.last_fail_ts
-#     """, (user, action, fail, ts))
+def set_attempt(conn, user, action, fail, ts):
+    c = conn.cursor()
+    c.execute("""
+      INSERT INTO attempts(user, action, fail_count, last_fail_ts)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user, action) DO UPDATE SET
+        fail_count=excluded.fail_count,
+        last_fail_ts=excluded.last_fail_ts
+    """, (user, action, fail, ts))
+    conn.commit()
+
+def check_bruteforce(conn, user, action):
+    fail, last = get_attempt(conn, user, action)
+    now = int(time.time())
+    if fail >= MAX_FAILS and now - last < BLOCK_SECONDS:
+        wait = BLOCK_SECONDS - (now - last)
+        print(f"Слишком много неверных кодов. Попробуйте через {wait} секунд.")
+        sys.exit(1)
+
+def verify_totp_for_operator(operator):
+    ga_file = Path(f"/home/{operator}/.google_authenticator")
+    if not ga_file.exists():
+        print("Нет файла .google_authenticator у оператора.")
+        sys.exit(1)
+    secret = ga_file.read_text().splitlines()[0].strip()
+    totp = pyotp.TOTP(secret)
+    code = getpass.getpass("Введите TOTP-код оператора: ").strip()
+    return totp.verify(code, valid_window=1)
+
+def main():
+    if len(sys.argv) != 2:
+        print(f"Использование: {sys.argv[0]} <user>")
+        sys.exit(1)
+
+    target = sys.argv[1]
+    operator = getpass.getuser()
+    action = "secure-passwd"
+
+    conn = init_db()
+    check_bruteforce(conn, operator, action)
+
+    if not verify_totp_for_operator(operator):
+        print("Неверный TOTP-код.")
+        fail, _ = get_attempt(conn, operator, action)
+        set_attempt(conn, operator, action, fail + 1, int(time.time()))
+        time.sleep(2)
+        sys.exit(1)
+
+    set_attempt(conn, operator, action, 0, int(time.time()))
+
+
+    subprocess.run(["/usr/bin/passwd", target], check=True)
+
+if __name__ == "main":
+    main()
