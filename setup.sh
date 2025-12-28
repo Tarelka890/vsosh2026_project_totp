@@ -46,8 +46,8 @@ aa-enforce /usr/local/sbin/secure-sshkeys
 
 echo "AppArmor setup complete."
 
-mkdir /var/log/risktotp
-mkdir /var/lib/risktotp
+mkdir -p /var/log/risktotp
+mkdir -p /var/lib/risktotp
 
 chmod 0640 /var/log/risktotp /var/lib/risktotp
 chown root:root /var/log/risktotp /var/lib/risktotp
