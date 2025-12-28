@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
-apt update && upgrade
+apt update && apt upgrade
 
 cp ./Binaries/secure-passwd   /usr/local/sbin/secure-passwd
 cp ./Binaries/secure-sshkeys  /usr/local/sbin/secure-sshkeys
