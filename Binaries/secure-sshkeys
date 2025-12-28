@@ -2,7 +2,10 @@
 import sys, getpass, subprocess, time, sqlite3, os, pwd
 from pathlib import Path
 import pyotp
+import json
+from datetime import datetime, timezone
 
+AUDIT_LOG = Path("/var/log/risktotp/audit.log")
 DB_PATH = Path("/var/lib/risktotp/secure_totp.db")
 MAX_FAILS = 3
 BLOCK_SECONDS = 300
@@ -16,20 +19,41 @@ ALLOWED_PREFIXES = (
     'sk-ecdsa-sha2-'
 )
 
-def read_pubkey_file(path_str):
+def audit(event, operator, action, target="", argv=None, result="", extra=None):
+    AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": event,
+        "operator": operator,
+        "uid": os.getuid(),
+        "action": action,
+        "target": target,
+        "argv": argv or [],
+        "result": result,        # "OK", "DENY", "FAIL(error code)"
+        "extra": extra or {},
+    }
+    line = json.dumps(rec, ensure_ascii=False)
+    with open(AUDIT_LOG, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+def read_pubkey_file(path_str, user, action):
     p = Path(path_str)
 
     if os.path.islink(p):
         print("Файл ключа не должен быть symlink.")
+        audit("read_key", user, action, target=sys.argv[1], argv=sys.argv[1:], result="FAIL_SYMLINK")
         return
     if not p.exists():
         print("Файл ключа не найден.")
+        audit("read_key", user, action, target=sys.argv[1], argv=sys.argv[1:], result="NO_FILE")
         return
 
     data = p.read_text(encoding="utf-8", errors="strict").strip()
     if "\n" in data or "\r" in data:
         print("Public key должен быть одной строкой.")
+        audit("read_key", user, action, target=sys.argv[1], argv=sys.argv[1:], result="FAIL_READ")
         return
+    audit("read_key", user, action, target=sys.argv[1], argv=sys.argv[1:], result="READ_SUCCESS")
     return data
 
 def check_ssh_dir(user):
@@ -44,9 +68,11 @@ def check_ssh_dir(user):
     # symlink check
     if ssh_dir.exists() and ssh_dir.is_symlink():
         print("~/.ssh является symlink — отказ.")
+        audit("check_ssh", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_SYMLINK")
         sys.exit(1)
     if auth_keys.exists() and auth_keys.is_symlink():
         print("authorized_keys является symlink — отказ.")
+        audit("check_ssh", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_SYMLINK")
         sys.exit(1)
 
     # create ~/.ssh
@@ -74,23 +100,29 @@ def remove_pubkey(user, key_line):
     # format check
     if not any(key_line.startswith(p) for p in ALLOWED_PREFIXES):
         print("Ключ не похож на SSH public key (неверный префикс).")
+        audit("remove_key", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_PREFIX")
         sys.exit(1)
     if "\n" in key_line or "\r" in key_line:
         print("Ключ должен быть одной строкой.")
+        audit("remove_key", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_READ")
         sys.exit(1)
 
+    audit("check_ssh", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="CHECK_START")
     _, auth_keys, uid, gid = check_ssh_dir(user)
+    audit("check_ssh", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="CHECK_DONE")
 
     # read keys and check for existing
     existing = auth_keys.read_text(errors="ignore").splitlines()
 
     if key_line not in existing:
         print("Ключ не найден в authorized_keys.")
+        audit("check_existing", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="KEY_MISSING")
         return
 
     #can't think of a better way to do this
     new_lines = [line for line in existing if line != key_line]
     auth_keys.write_text("\n".join(new_lines) + ("\n" if new_lines else ""), encoding="utf-8")
+    audit("remove_key", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="REMOVE_DONE")
 
     os.chmod(auth_keys, 0o600)
     os.chown(auth_keys, uid, gid)
@@ -106,22 +138,26 @@ def add_pubkey(user, key_line):
     # format check
     if not any(key_line.startswith(p) for p in ALLOWED_PREFIXES):
         print("Ключ не похож на SSH public key (неверный префикс).")
+        audit("add_key", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_PREFIX")
         sys.exit(1)
     if "\n" in key_line or "\r" in key_line:
         print("Ключ должен быть одной строкой.")
+        audit("add_key", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_READ")
         sys.exit(1)
 
+    audit("check_ssh", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="CHECK_START")
     _, auth_keys, uid, gid = check_ssh_dir(user)
-
+    audit("check_ssh", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="CHECK_DONE")
     # read keys and check for existing
     existing = auth_keys.read_text(errors="ignore").splitlines()
     if key_line in existing:
+        audit("check_existing", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FOUND_KEY")
         return
 
     #append to the end
     with auth_keys.open("a", encoding="utf-8") as f:
         f.write(key_line + "\n")
-
+    audit("add_key", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="ADD_DONE")
     #set rights
     os.chmod(auth_keys, 0o600)
     os.chown(auth_keys, uid, gid)
@@ -166,12 +202,14 @@ def check_bruteforce(conn, user, action):
     if fail >= MAX_FAILS and now - last < BLOCK_SECONDS:
         wait = BLOCK_SECONDS - (now - last)
         print(f"Слишком много неверных кодов. Попробуйте через {wait} секунд.")
+        audit("blocked", user, action, target=sys.argv[1], argv=sys.argv[1:], result="BLOCKED")
         sys.exit(1)
 
 def verify_totp_for_operator(operator):
     ga_file = Path(f"/home/{operator}/.google_authenticator")
     if not ga_file.exists():
         print("Нет файла .google_authenticator у оператора.")
+        audit("verify_totp", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_READ")
         sys.exit(1)
     secret = ga_file.read_text().splitlines()[0].strip()
     totp = pyotp.TOTP(secret)
@@ -192,11 +230,13 @@ def main():
         if not operator:
             print("Необходим запуск через sudo")
             sys.exit(1)
+        audit("start", operator, action, target=target, argv=sys.argv[1:], result="BEGIN")
         conn = init_db()
         check_bruteforce(conn, operator, action)
 
         if not verify_totp_for_operator(operator):
             print("Неверный TOTP-код.")
+            audit("totp", operator, action, target=target, argv=sys.argv[1:], result="DENY_TOTP")
             fail, _ = get_attempt(conn, operator, action)
             set_attempt(conn, operator, action, fail + 1, int(time.time()))
             time.sleep(2)
@@ -204,13 +244,17 @@ def main():
 
         set_attempt(conn, operator, action, 0, int(time.time()))
         if choice in ['remove-file', 'add-file']:
-            key = read_pubkey_file(key)
+            audit("read_key", operator, action, target=target, argv=sys.argv[1:], result="READ_FILE")
+            key = read_pubkey_file(key, operator, action)
         if choice in ['add', 'add-file']:
+            audit("add_key", operator, action, target=target, argv=sys.argv[1:], result="ADD_START")
             add_pubkey(target, key)
         elif choice in ['remove', 'remove-file']:
+            audit("remove_key", operator, action, target=target, argv=sys.argv[1:], result="REMOVE_START")
             remove_pubkey(target, key)
         else:
             print("Неверный выбор. Доступны add/remove")
+            audit("wrong_choice", operator, action, target=target, argv=sys.argv[1:], result="WRONG_CHOICE")
             exit(1)
     except KeyboardInterrupt:
         print('\n')
