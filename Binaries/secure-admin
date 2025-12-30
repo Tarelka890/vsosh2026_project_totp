@@ -133,18 +133,19 @@ def main():
     # action для БД попыток — разный для разных команд
     action = f"secure-{ns.cmd}" if ns.cmd != "usermod" else f"secure-usermod:{ns.op}"
 
-    check_bruteforce(conn, operator, action)
-
-    if not verify_totp_for_operator(operator):
-        print("Неверный TOTP-код.")
-        fail, _ = get_attempt(conn, operator, action)
-        set_attempt(conn, operator, action, fail + 1, int(time.time()))
-        time.sleep(2)
-        sys.exit(1)
-
-    set_attempt(conn, operator, action, 0, int(time.time()))
 
     try:
+        check_bruteforce(conn, operator, action)
+
+        if not verify_totp_for_operator(operator):
+            print("Неверный TOTP-код.")
+            fail, _ = get_attempt(conn, operator, action)
+            set_attempt(conn, operator, action, fail + 1, int(time.time()))
+            time.sleep(2)
+            sys.exit(1)
+
+        set_attempt(conn, operator, action, 0, int(time.time()))
+
         if ns.cmd == "useradd":
             validate_new_username(ns.user)
             if ns.shell != DEFAULT_SHELL:
