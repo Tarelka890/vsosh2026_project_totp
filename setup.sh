@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
+
 apt update
+apt install -y python3 python3-pip
 
-cp ./Binaries/secure-passwd   /usr/local/sbin/secure-passwd
-cp ./Binaries/secure-sshkeys  /usr/local/sbin/secure-sshkeys
-cp ./Binaries/secure-admin  /usr/local/sbin/secure-admin
+python3 -m pip install --break-system-packages -U pyotp
 
-chown root:root /usr/local/sbin/secure-passwd /usr/local/sbin/secure-sshkeys
-chmod 0755      /usr/local/sbin/secure-passwd /usr/local/sbin/secure-sshkeys
-
-chown root:root /usr/local/sbin/secure-admin /usr/local/sbin/secure-admin
-chmod 0755      /usr/local/sbin/secure-admin /usr/local/sbin/secure-admin
+install -o root -g root -m 0755 ./Binaries/secure-passwd   /usr/local/sbin/secure-passwd
+install -o root -g root -m 0755 ./Binaries/secure-sshkeys  /usr/local/sbin/secure-sshkeys
+install -o root -g root -m 0755 ./Binaries/secure-admin    /usr/local/sbin/secure-admin
+install -o root -g root -m 0755 ./Binaries/secure-audit-view /usr/local/sbin/secure-audit-view
 
 echo "! Binaries setup complete."
 
@@ -20,34 +19,44 @@ cat > /etc/sudoers.d/operators <<'EOF'
 %operators ALL=(root) NOPASSWD: /usr/local/sbin/secure-passwd *
 %operators ALL=(root) NOPASSWD: /usr/local/sbin/secure-sshkeys *
 %operators ALL=(root) NOPASSWD: /usr/local/sbin/secure-admin *
+%operators ALL=(root) NOPASSWD: /usr/local/sbin/secure-audit-view *
 EOF
 
 chmod 0440 /etc/sudoers.d/operators
-
 visudo -cf /etc/sudoers.d/operators
-
 echo "! Sudoers setup complete."
 
-apt update
-apt install apparmor apparmor-utils apparmor-profiles
-systemctl start apparmor
-systemctl enable apparmor
-
+apt install -y apparmor apparmor-utils apparmor-profiles logrotate
+systemctl enable --now apparmor
+aa-status >/dev/null || true
 echo "! AppArmor installation complete."
 
-cp ./AppArmor/passwd_aa  /etc/apparmor.d/usr.local.sbin.secure-passwd
-cp ./AppArmor/sshkeys_aa /etc/apparmor.d/usr.local.sbin.secure-sshkeys
+install -o root -g root -m 0644 ./AppArmor/passwd_aa      /etc/apparmor.d/usr.local.sbin.secure-passwd
+install -o root -g root -m 0644 ./AppArmor/sshkeys_aa     /etc/apparmor.d/usr.local.sbin.secure-sshkeys
+install -o root -g root -m 0644 ./AppArmor/secure_admin_aa /etc/apparmor.d/usr.local.sbin.secure-admin
+install -o root -g root -m 0644 ./AppArmor/audit_view_aa  /etc/apparmor.d/usr.local.sbin.secure-audit-view
+
 apparmor_parser -r /etc/apparmor.d/usr.local.sbin.secure-passwd -W
 apparmor_parser -r /etc/apparmor.d/usr.local.sbin.secure-sshkeys -W
+apparmor_parser -r /etc/apparmor.d/usr.local.sbin.secure-admin -W
+apparmor_parser -r /etc/apparmor.d/usr.local.sbin.secure-audit-view -W
+
 aa-enforce /usr/local/sbin/secure-passwd
 aa-enforce /usr/local/sbin/secure-sshkeys
+aa-enforce /usr/local/sbin/secure-admin
+aa-enforce /usr/local/sbin/secure-audit-view
 
 echo "! AppArmor setup complete."
 
-mkdir -p /var/log/risktotp
-mkdir -p /var/lib/risktotp
-
-chmod 0640 /var/log/risktotp /var/lib/risktotp
-chown root:root /var/log/risktotp /var/lib/risktotp
-
+install -o root -g root -m 0750 -d /var/log/risktotp
+install -o root -g root -m 0750 -d /var/lib/risktotp
+touch /var/log/risktotp/audit.log
+chown root:root /var/log/risktotp/audit.log
+chmod 0640 /var/log/risktotp/audit.log
 echo "! Folder setup complete."
+
+cat logrotate > /etc/logrotate.d/risktotp
+
+echo "! Logrotate setup complete."
+
+echo "! Install finished."

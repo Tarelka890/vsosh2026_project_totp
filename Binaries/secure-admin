@@ -3,13 +3,34 @@ import sys, getpass, subprocess, time, sqlite3, os
 from pathlib import Path
 import pyotp
 import argparse, pwd, re
+import json
+from datetime import datetime, timezone
+
 
 DB_PATH = Path("/var/lib/risktotp/secure_totp.db")
+AUDIT_LOG = Path("/var/log/risktotp/audit.log")
 USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 ALLOWED_GROUPS = {"developers", "operators", "test_group"} #redact this for your use
 DEFAULT_SHELL = "/bin/bash"
 MAX_FAILS = 3
 BLOCK_SECONDS = 300
+
+def audit(event, operator, action, target="", argv=None, result="", extra=None):
+    AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": event,
+        "operator": operator,
+        "uid": os.getuid(),
+        "action": action,
+        "target": target,
+        "argv": argv or [],
+        "result": result,        # "OK", "DENY", "FAIL(error code)"
+        "extra": extra or {},
+    }
+    line = json.dumps(rec, ensure_ascii=False)
+    with open(AUDIT_LOG, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
 
 def require_sudo_user():
     op = os.environ.get("SUDO_USER")
@@ -78,12 +99,13 @@ def set_attempt(conn, user, action, fail, ts):
     """, (user, action, fail, ts))
     conn.commit()
 
-def check_bruteforce(conn, user, action):
+def check_bruteforce(conn, user, action, ns):
     fail, last = get_attempt(conn, user, action)
     now = int(time.time())
     if fail >= MAX_FAILS and now - last < BLOCK_SECONDS:
         wait = BLOCK_SECONDS - (now - last)
         print(f"Слишком много неверных кодов. Попробуйте через {wait} секунд.")
+        audit("blocked", user, action, target=ns.user if hasattr(ns, "user") else "", argv=sys.argv[1:], result="BLOCKED")
         sys.exit(1)
 
 def verify_totp_for_operator(operator):
@@ -132,46 +154,78 @@ def main():
 
     # action для БД попыток — разный для разных команд
     action = f"secure-{ns.cmd}" if ns.cmd != "usermod" else f"secure-usermod:{ns.op}"
-
+    audit("start", operator, action, target=ns.user if hasattr(ns, "user") else "", argv=sys.argv[1:], result="BEGIN")
 
     try:
-        check_bruteforce(conn, operator, action)
+        check_bruteforce(conn, operator, action, ns)
 
         if not verify_totp_for_operator(operator):
             print("Неверный TOTP-код.")
+            audit("totp", operator, action, target=ns.user if hasattr(ns, "user") else "", argv=sys.argv[1:], result="DENY_TOTP")
             fail, _ = get_attempt(conn, operator, action)
             set_attempt(conn, operator, action, fail + 1, int(time.time()))
             time.sleep(2)
             sys.exit(1)
 
         set_attempt(conn, operator, action, 0, int(time.time()))
-
+        audit("totp", operator, action, target=ns.user, argv=sys.argv[1:], result="OK")
         if ns.cmd == "useradd":
             validate_new_username(ns.user)
             if ns.shell != DEFAULT_SHELL:
                 print("Запрещённый shell.")
+                audit("blocked", operator, action, target=ns.user, argv=sys.argv[1:], result="ADD_SHELL")
                 sys.exit(2)
             cmd = ["/usr/sbin/useradd"]
             if ns.create_home:
                 cmd += ["-m"]
             cmd += ["-s", DEFAULT_SHELL, ns.user]
-            subprocess.run(cmd)
+            audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="RUN_ADD")
+            try:
+                subprocess.run(cmd)
+            except subprocess.CalledProcessError as e:
+                audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result=f"FAIL(rc={e.returncode})")
+                print("Операция не выполнена. Произошла ошибка (подробности в логах).")
+                sys.exit(1)
             sys.exit(0)
 
         if ns.cmd == "usermod":
             validate_user_exists(ns.user)
 
             if ns.op == "lock":
-                subprocess.run(["/usr/sbin/usermod", "-L", ns.user])
+                audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="RUN_MOD_LOCK")
+                try:
+                    subprocess.run(["/usr/sbin/usermod", "-L", ns.user])
+                except subprocess.CalledProcessError as e:
+                    audit("exec", operator, action, target=ns.user, argv=sys.argv[1:],
+                          result=f"FAIL(rc={e.returncode})")
+                    print("Операция не выполнена. Произошла ошибка (подробности в логах).")
+                    sys.exit(1)
+                audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="DONE_MOD_LOCK")
                 sys.exit(0)
 
             if ns.op == "unlock":
-                subprocess.run(["/usr/sbin/usermod", "-U", ns.user])
+                audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="RUN_MOD_UNLOCK")
+                try:
+                    subprocess.run(["/usr/sbin/usermod", "-U", ns.user])
+                except subprocess.CalledProcessError as e:
+                    audit("exec", operator, action, target=ns.user, argv=sys.argv[1:],
+                          result=f"FAIL(rc={e.returncode})")
+                    print("Операция не выполнена. Произошла ошибка (подробности в логах).")
+                    sys.exit(1)
+                audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="DONE_MOD_UNLOCK")
                 sys.exit(0)
 
             if ns.op == "add-groups":
                 groups = validate_groups(ns.groups)
-                subprocess.run(["/usr/sbin/usermod", "-aG", groups, ns.user])
+                audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="RUN_MOD_GROUPS")
+                try:
+                    subprocess.run(["/usr/sbin/usermod", "-aG", groups, ns.user])
+                except subprocess.CalledProcessError as e:
+                    audit("exec", operator, action, target=ns.user, argv=sys.argv[1:],
+                          result=f"FAIL(rc={e.returncode})")
+                    print("Операция не выполнена. Произошла ошибка (подробности в логах).")
+                    sys.exit(1)
+                audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="DONE_MOD_GROUPS")
                 sys.exit(0)
 
     except KeyboardInterrupt:

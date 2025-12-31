@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+import json, sys
+from datetime import datetime
+
+path = "/var/log/risktotp/audit.log"
+
+with open(path, "r", encoding="utf-8") as f:
+    for line in f:
+        try:
+            r = json.loads(line)
+            ts = r["ts"]
+            op = r["operator"]
+            act = r["action"]
+            tgt = r.get("target", "")
+            res = r["result"]
+            print(f"{ts} | {op:10} | {act:25} | {tgt:15} | {res}")
+        except Exception:
+            continue
