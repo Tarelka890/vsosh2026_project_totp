@@ -33,8 +33,8 @@ echo "! AppArmor installation complete."
 
 install -o root -g root -m 0644 ./AppArmor/passwd_aa      /etc/apparmor.d/usr.local.sbin.secure-passwd
 install -o root -g root -m 0644 ./AppArmor/sshkeys_aa     /etc/apparmor.d/usr.local.sbin.secure-sshkeys
-install -o root -g root -m 0644 ./AppArmor/secure_admin_aa /etc/apparmor.d/usr.local.sbin.secure-admin
-install -o root -g root -m 0644 ./AppArmor/audit_view_aa  /etc/apparmor.d/usr.local.sbin.secure-audit-view
+install -o root -g root -m 0644 ./AppArmor/admin_aa /etc/apparmor.d/usr.local.sbin.secure-admin
+install -o root -g root -m 0644 ./AppArmor/audit_aa  /etc/apparmor.d/usr.local.sbin.secure-audit-view
 
 apparmor_parser -r /etc/apparmor.d/usr.local.sbin.secure-passwd -W
 apparmor_parser -r /etc/apparmor.d/usr.local.sbin.secure-sshkeys -W
