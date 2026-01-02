@@ -94,35 +94,35 @@ def check_ssh_dir(user):
     #pass uid and gid for file chown
     return ssh_dir, auth_keys, uid, gid
 
-def remove_pubkey(user, key_line):
+def remove_pubkey(operator, user, key_line):
     key_line = key_line.strip()
 
     # format check
     if not any(key_line.startswith(p) for p in ALLOWED_PREFIXES):
         print("Ключ не похож на SSH public key (неверный префикс).")
-        audit("remove_key", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_PREFIX")
+        audit("remove_key", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_PREFIX")
         sys.exit(1)
     if "\n" in key_line or "\r" in key_line:
         print("Ключ должен быть одной строкой.")
-        audit("remove_key", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_READ")
+        audit("remove_key", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_READ")
         sys.exit(1)
 
-    audit("check_ssh", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="CHECK_START")
+    audit("check_ssh", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="CHECK_START")
     _, auth_keys, uid, gid = check_ssh_dir(user)
-    audit("check_ssh", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="CHECK_DONE")
+    audit("check_ssh", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="CHECK_DONE")
 
     # read keys and check for existing
     existing = auth_keys.read_text(errors="ignore").splitlines()
 
     if key_line not in existing:
         print("Ключ не найден в authorized_keys.")
-        audit("check_existing", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="KEY_MISSING")
+        audit("check_existing", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="KEY_MISSING")
         return
 
     #can't think of a better way to do this
     new_lines = [line for line in existing if line != key_line]
     auth_keys.write_text("\n".join(new_lines) + ("\n" if new_lines else ""), encoding="utf-8")
-    audit("remove_key", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="REMOVE_DONE")
+    audit("remove_key", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="REMOVE_DONE")
 
     os.chmod(auth_keys, 0o600)
     os.chown(auth_keys, uid, gid)
@@ -132,32 +132,32 @@ def remove_pubkey(user, key_line):
     print(f"Ключ удалён (совпадений: {removed})")
     return
 
-def add_pubkey(user, key_line):
+def add_pubkey(operator, user, key_line):
     key_line = key_line.strip()
 
     # format check
     if not any(key_line.startswith(p) for p in ALLOWED_PREFIXES):
         print("Ключ не похож на SSH public key (неверный префикс).")
-        audit("add_key", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_PREFIX")
+        audit("add_key", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_PREFIX")
         sys.exit(1)
     if "\n" in key_line or "\r" in key_line:
         print("Ключ должен быть одной строкой.")
-        audit("add_key", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_READ")
+        audit("add_key", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FAIL_READ")
         sys.exit(1)
 
-    audit("check_ssh", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="CHECK_START")
+    audit("check_ssh", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="CHECK_START")
     _, auth_keys, uid, gid = check_ssh_dir(user)
-    audit("check_ssh", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="CHECK_DONE")
+    audit("check_ssh", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="CHECK_DONE")
     # read keys and check for existing
     existing = auth_keys.read_text(errors="ignore").splitlines()
     if key_line in existing:
-        audit("check_existing", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FOUND_KEY")
+        audit("check_existing", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="FOUND_KEY")
         return
 
     #append to the end
     with auth_keys.open("a", encoding="utf-8") as f:
         f.write(key_line + "\n")
-    audit("add_key", user, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="ADD_DONE")
+    audit("add_key", operator, "secure-sshkeys", target=sys.argv[1], argv=sys.argv[1:], result="ADD_DONE")
     #set rights
     os.chmod(auth_keys, 0o600)
     os.chown(auth_keys, uid, gid)
@@ -248,10 +248,10 @@ def main():
             key = read_pubkey_file(key, operator, action)
         if choice in ['add', 'add-file']:
             audit("add_key", operator, action, target=target, argv=sys.argv[1:], result="ADD_START")
-            add_pubkey(target, key)
+            add_pubkey(operator, target, key)
         elif choice in ['remove', 'remove-file']:
             audit("remove_key", operator, action, target=target, argv=sys.argv[1:], result="REMOVE_START")
-            remove_pubkey(target, key)
+            remove_pubkey(operator, target, key)
         else:
             print("Неверный выбор. Доступны add/remove")
             audit("wrong_choice", operator, action, target=target, argv=sys.argv[1:], result="WRONG_CHOICE")
