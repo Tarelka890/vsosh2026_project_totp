@@ -1,7 +1,7 @@
 # Last Modified: Sun Dec 28 10:42:39 2025
 include <tunables/global>
 
-/usr/local/sbin/secure-passwd {
+/usr/local/sbin/secure-passwd flags=(enforce){
   include <abstractions/base>
 
   capability chown,
