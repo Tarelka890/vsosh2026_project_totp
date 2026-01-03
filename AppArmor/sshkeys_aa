@@ -13,7 +13,7 @@ include <tunables/global>
   /home/*/.google_authenticator r,
   /home/*/.ssh/ rw,
   /home/*/.ssh/** rwk,
-  /tmp/** r,
+  /home/*/*.pub r,
   /usr/bin/python3 ix,
   /usr/bin/python3.13 ix,
   /usr/local/sbin/secure-sshkeys r,
