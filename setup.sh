@@ -10,6 +10,7 @@ install -o root -g root -m 0755 ./Binaries/secure-passwd   /usr/local/sbin/secur
 install -o root -g root -m 0755 ./Binaries/secure-sshkeys  /usr/local/sbin/secure-sshkeys
 install -o root -g root -m 0755 ./Binaries/secure-admin    /usr/local/sbin/secure-admin
 install -o root -g root -m 0755 ./Binaries/secure-audit-view /usr/local/sbin/secure-audit-view
+install -o root -g root -m 0755 ./Binaries/secure-approve /usr/local/sbin/secure-approve
 
 echo "! Binaries setup complete."
 
@@ -20,6 +21,7 @@ cat > /etc/sudoers.d/operators <<'EOF'
 %operators ALL=(root) NOPASSWD: /usr/local/sbin/secure-sshkeys *
 %operators ALL=(root) NOPASSWD: /usr/local/sbin/secure-admin *
 %operators ALL=(root) NOPASSWD: /usr/local/sbin/secure-audit-view *
+%operators ALL=(root) NOPASSWD: /usr/local/sbin/secure-approve *
 EOF
 
 chmod 0440 /etc/sudoers.d/operators

@@ -15,6 +15,42 @@ DEFAULT_SHELL = "/bin/bash"
 MAX_FAILS = 3
 BLOCK_SECONDS = 300
 
+def classify_risk(ns):
+    if ns.cmd == "usermod":
+        if ns.op in ["unlock", "add-groups"]:
+            if ns.op == "add-groups" and "operators" in ns.groups.split(','):
+                return "CRITICAL"
+            if ns.op == "unlock":
+                return "CRITICAL"
+        return "HIGH"
+    return "LOW"
+
+def create_approval(conn, requester, action, target, argv_list, risk):
+    now = int(time.time())
+    c = conn.cursor()
+    c.execute("""INSERT INTO approvals(ts, requester, action, target, argv_json, risk, status)
+                 VALUES (?, ?, ?, ?, ?, ?, 'PENDING')""",
+              (now, requester, action, target, json.dumps(argv_list, ensure_ascii=False), risk))
+    conn.commit()
+    return c.lastrowid
+
+def get_approval(conn, app_id):
+    c = conn.cursor()
+    c.execute("""SELECT id, requester, action, target, argv_json, risk, status, approver
+                 FROM approvals WHERE id=?""", (app_id,))
+    return c.fetchone()
+
+def require_approved(conn, app_id):
+    row = get_approval(conn, app_id)
+    if not row:
+        print("Заявка не найдена.")
+        sys.exit(2)
+    (_id, requester, action, target, argv_json, risk, status, approver) = row
+    if status != "APPROVED" or not approver:
+        print("Заявка не подтверждена вторым оператором.")
+        sys.exit(3)
+    return requester, action, target, json.loads(argv_json), risk, approver
+
 def audit(event, operator, action, target="", argv=None, result="", extra=None):
     AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
     rec = {
@@ -69,15 +105,23 @@ def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS attempts (
-            user TEXT NOT NULL,
-            action TEXT NOT NULL,
-            fail_count INTEGER NOT NULL,
-            last_fail_ts INTEGER NOT NULL,
-            PRIMARY KEY(user, action)
-        )
-    """)
+    # assuming that attempts already exists.
+
+    c.execute("""CREATE TABLE IF NOT EXISTS approvals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      requester TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target TEXT NOT NULL,
+      argv_json TEXT NOT NULL,
+      risk TEXT NOT NULL,
+      status TEXT NOT NULL,
+      approver TEXT,
+      approved_ts INTEGER,
+      exec_ts INTEGER,
+      exec_result TEXT
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)")
     conn.commit()
     return conn
 
@@ -149,10 +193,40 @@ def main():
     operator = require_sudo_user()
     conn = init_db()
 
+    # i should change this tbh... but no argparse
+    if len(sys.argv) == 3 and sys.argv[1] == "--execute-approved":
+        app_id = int(sys.argv[2])
+        requester, action_name, target, argv_list, risk, approver = require_approved(conn, app_id)
+
+        audit("exec", operator, "secure-admin", target=str(app_id),
+              argv=[str(app_id)], result="RUN_APPROVED",
+              extra={"approver": approver, "requester": requester, "saved_argv": argv_list})
+
+        if len(argv_list) >= 3 and argv_list[0] == "usermod":
+            op = argv_list[1]
+            user = argv_list[2]
+            #only this for now
+            if op == "unlock":
+                subprocess.run(["/usr/sbin/usermod", "-U", user], check=True)
+                audit("exec", operator, "secure-admin", target=user, argv=argv_list, result="DONE_APPROVED_UNLOCK")
+                sys.exit(0)
+
+            if op == "add-groups":
+                if len(argv_list) != 4:
+                    print("Некорректная заявка (ожидалось: usermod add-groups <user> <groups>).")
+                    sys.exit(4)
+                groups = argv_list[3]
+                subprocess.run(["/usr/sbin/usermod", "-aG", groups, user], check=True)
+                audit("exec", operator, "secure-admin", target=user, argv=argv_list, result="DONE_APPROVED_GROUPS")
+                sys.exit(0)
+
+        print("Заявка содержит неподдерживаемую команду.")
+        sys.exit(5)
+
     parser = build_parser()
     ns = parser.parse_args()
 
-    # action для БД попыток — разный для разных команд
+    # different action
     action = f"secure-{ns.cmd}" if ns.cmd != "usermod" else f"secure-usermod:{ns.op}"
     audit("start", operator, action, target=ns.user if hasattr(ns, "user") else "", argv=sys.argv[1:], result="BEGIN")
 
@@ -181,7 +255,7 @@ def main():
             cmd += ["-s", DEFAULT_SHELL, ns.user]
             audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="RUN_ADD")
             try:
-                subprocess.run(cmd)
+                subprocess.run(cmd, check=True)
             except subprocess.CalledProcessError as e:
                 audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result=f"FAIL(rc={e.returncode})")
                 print("Операция не выполнена. Произошла ошибка (подробности в логах).")
@@ -194,7 +268,7 @@ def main():
             if ns.op == "lock":
                 audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="RUN_MOD_LOCK")
                 try:
-                    subprocess.run(["/usr/sbin/usermod", "-L", ns.user])
+                    subprocess.run(["/usr/sbin/usermod", "-L", ns.user], check=True)
                 except subprocess.CalledProcessError as e:
                     audit("exec", operator, action, target=ns.user, argv=sys.argv[1:],
                           result=f"FAIL(rc={e.returncode})")
@@ -202,24 +276,40 @@ def main():
                     sys.exit(1)
                 audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="DONE_MOD_LOCK")
                 sys.exit(0)
-
+            #pray to god this works
             if ns.op == "unlock":
-                audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="RUN_MOD_UNLOCK")
-                try:
-                    subprocess.run(["/usr/sbin/usermod", "-U", ns.user])
-                except subprocess.CalledProcessError as e:
-                    audit("exec", operator, action, target=ns.user, argv=sys.argv[1:],
-                          result=f"FAIL(rc={e.returncode})")
-                    print("Операция не выполнена. Произошла ошибка (подробности в логах).")
-                    sys.exit(1)
-                audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="DONE_MOD_UNLOCK")
+                risk = "CRITICAL"
+                app_id = create_approval(conn, operator, "secure-admin", ns.user, sys.argv[1:], risk)
+                audit("request", operator, action, target=ns.user, argv=sys.argv[1:], result="PENDING",
+                      extra={"approval_id":app_id, "risk":risk})
+                print(f"CRITICAL: создана заявка #{app_id}. Для выполнения нужен второй оператор: ")
+                print(f"  sudo secure-approve {app_id}")
                 sys.exit(0)
-
+                # audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="RUN_MOD_UNLOCK")
+                # try:
+                #     subprocess.run(["/usr/sbin/usermod", "-U", ns.user], check=True)
+                # except subprocess.CalledProcessError as e:
+                #     audit("exec", operator, action, target=ns.user, argv=sys.argv[1:],
+                #           result=f"FAIL(rc={e.returncode})")
+                #     print("Операция не выполнена. Произошла ошибка (подробности в логах).")
+                #     sys.exit(1)
+                # audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="DONE_MOD_UNLOCK")
+                # sys.exit(0)
+            #pray to god this works x2
             if ns.op == "add-groups":
                 groups = validate_groups(ns.groups)
+                if "operators" in groups.split(','):
+                    risk = "CRITICAL"
+                    app_id = create_approval(conn, operator, "secure-admin", ns.user, sys.argv[1:], risk)
+                    audit("request", operator, action, target=ns.user, argv=sys.argv[1:], result="PENDING",
+                          extra={"approval_id":app_id, "risk":risk, "groups":groups})
+                    print(f"CRITICAL: создана заявка #{app_id}. Для выполнения нужен второй оператор: ")
+                    print(f"  sudo secure-approve {app_id}")
+                    sys.exit(0)
+                #else just do what was earlier
                 audit("exec", operator, action, target=ns.user, argv=sys.argv[1:], result="RUN_MOD_GROUPS")
                 try:
-                    subprocess.run(["/usr/sbin/usermod", "-aG", groups, ns.user])
+                    subprocess.run(["/usr/sbin/usermod", "-aG", groups, ns.user], check=True)
                 except subprocess.CalledProcessError as e:
                     audit("exec", operator, action, target=ns.user, argv=sys.argv[1:],
                           result=f"FAIL(rc={e.returncode})")
