@@ -22,6 +22,24 @@ def require_sudo_user():
         sys.exit(1)
     return op
 
+def get_attempt(conn, user, action):
+    c = conn.cursor()
+    c.execute("SELECT fail_count, last_fail_ts FROM attempts WHERE user=? AND action=?",
+              (user, action))
+    row = c.fetchone()
+    return (row[0], row[1]) if row else (0, 0)
+
+def set_attempt(conn, user, action, fail, ts):
+    c = conn.cursor()
+    c.execute("""
+      INSERT INTO attempts(user, action, fail_count, last_fail_ts)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user, action) DO UPDATE SET
+        fail_count=excluded.fail_count,
+        last_fail_ts=excluded.last_fail_ts
+    """, (user, action, fail, ts))
+    conn.commit()
+
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -40,6 +58,15 @@ def init_db():
         exec_ts INTEGER,
         exec_result TEXT
     )""")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS attempts (
+            user TEXT NOT NULL,
+            action TEXT NOT NULL,
+            fail_count INTEGER NOT NULL,
+            last_fail_ts INTEGER NOT NULL,
+            PRIMARY KEY(user, action)
+        )
+    """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)")
     conn.commit()
     return conn
@@ -150,6 +177,8 @@ def main():
 
     if not verify_totp_for_operator(operator):
         print("Неверный TOTP-код.")
+        fail, _ = get_attempt(conn, operator, action)
+        set_attempt(conn, operator, "secure-approve", fail+1, int(time.time()))
         audit("approve", operator, "secure-approve", target=str(app_id), argv=sys.argv[1:], result="DENY_TOTP")
         sys.exit(5)
 
@@ -169,7 +198,7 @@ def main():
         print("Неизвестное действие заявки.")
         sys.exit(7)
 
-    cmd = [ALLOWED_EXEC[action], "--execute-approved", str(app_id)] # i don't know, we probably try this?
+    cmd = [ALLOWED_EXEC[action], "--execute-approved", str(app_id)] # i don't know, *should* probably try this?
     try:
         p = subprocess.run(cmd, check=False)
         if p.returncode == 0:
