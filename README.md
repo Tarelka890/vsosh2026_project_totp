@@ -76,8 +76,8 @@ RiskTOTP добавляет **второй фактор (TOTP)** не тольк
 3. Включите в PAM sshd (пример, может отличаться по дистрибутиву):
    `/etc/pam.d/sshd`:
 
-auth required pam_google_authenticator.so nullok
-@include common-auth
+>auth required pam_google_authenticator.so nullok
+>@include common-auth
 
 4. Перезапустите SSH:
 
@@ -126,10 +126,13 @@ auth required pam_google_authenticator.so nullok
 
 ## Просмотр аудита
 
+Примеры:
+
 `sudo secure-audit-view --tail 50`
 `sudo secure-audit-view --approvals`
 `sudo secure-audit-view --id 4`
 `sudo secure-audit-view --verify`
+
 ---
 
 # Аудит и анти-брут
@@ -149,22 +152,6 @@ auth required pam_google_authenticator.so nullok
 4. secure-admin usermod add-groups: управление группами (TOTP + лог).
 5. (опционально) CRITICAL approve: заявка → подтверждение → выполнение → цепочка логов.
 
----
-
-# Структура репозитория
-
-Binaries/
-  secure-passwd
-  secure-sshkeys
-  secure-admin
-  secure-approve        # опционально
-  secure-audit-view
-AppArmor/
-  passwd_aa
-  sshkeys_aa
-  admin_aa
-  approve_aa            # опционально
-install.sh
 ---
 
 # Ограничения
