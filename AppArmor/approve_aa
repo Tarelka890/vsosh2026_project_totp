@@ -16,9 +16,9 @@
   /usr/bin/python3.13 ix,
 
   /usr/local/sbin/secure-approve r,
-  /usr/local/sbin/secure-admin ix,
-  /usr/local/sbin/secure-passwd ix,
-  /usr/local/sbin/secure-sshkeys ix,
+  /usr/local/sbin/secure-admin rix,
+  /usr/local/sbin/secure-passwd rix,
+  /usr/local/sbin/secure-sshkeys rix,
 
   /var/lib/risktotp/** rwk,
   /var/log/risktotp/** rwk,
