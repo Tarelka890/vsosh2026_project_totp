@@ -37,7 +37,7 @@ install -o root -g root -m 0644 ./AppArmor/passwd_aa      /etc/apparmor.d/usr.lo
 install -o root -g root -m 0644 ./AppArmor/sshkeys_aa     /etc/apparmor.d/usr.local.sbin.secure-sshkeys
 install -o root -g root -m 0644 ./AppArmor/admin_aa /etc/apparmor.d/usr.local.sbin.secure-admin
 install -o root -g root -m 0644 ./AppArmor/audit_aa  /etc/apparmor.d/usr.local.sbin.secure-audit-view
-install -o root -g root -m 0644 ./AppArmor/approve_aa /etc/apparmor.d/usr.local.sbin.secure_approve
+install -o root -g root -m 0644 ./AppArmor/approve_aa /etc/apparmor.d/usr.local.sbin.secure-approve
 
 apparmor_parser -r /etc/apparmor.d/usr.local.sbin.secure-passwd -W
 apparmor_parser -r /etc/apparmor.d/usr.local.sbin.secure-sshkeys -W
