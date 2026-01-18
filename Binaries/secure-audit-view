@@ -115,11 +115,6 @@ def main():
 
     lines = PATH.read_text(encoding="utf-8", errors="ignore").splitlines()
 
-    if do_verify:
-        rc = verify_chain(lines)
-        if rc != 0:
-            sys.exit(rc)
-
     if tail is not None and tail > 0:
         lines = lines[-tail:]
 
@@ -158,6 +153,11 @@ def main():
             suffix = ""
 
         print(f"{ts} | {op:12} | {ev:14} | {act:20} | {tgt:16} | {res}{suffix}")
+
+    if do_verify:
+        rc = verify_chain(lines)
+        if rc != 0:
+            sys.exit(rc)
 
 if __name__ == "__main__":
     main()

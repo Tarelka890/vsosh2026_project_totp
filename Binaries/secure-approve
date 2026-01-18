@@ -169,32 +169,32 @@ def main():
     if requester == operator:
         print("Нельзя подтверждать свою же заявку (нужен второй оператор).")
         audit("approve", operator, "secure-approve", target=str(app_id), argv=sys.argv[1:], result="DENY_SELF",
-              extra={"requester": requester, "action": action, "risk": risk})
+              extra={"requester": requester, "action": action, "risk": risk, "id":_id})
         sys.exit(4)
 
     audit("approve_start", operator, "secure-approve", target=str(app_id), argv=sys.argv[1:], result="BEGIN",
-          extra={"requester": requester, "action": action, "risk": risk, "target_user": target})
+          extra={"requester": requester, "action": action, "risk": risk, "target_user": target, "id":_id})
 
     if not verify_totp_for_operator(operator):
         print("Неверный TOTP-код.")
         fail, _ = get_attempt(conn, operator, action)
         set_attempt(conn, operator, "secure-approve", fail+1, int(time.time()))
-        audit("approve", operator, "secure-approve", target=str(app_id), argv=sys.argv[1:], result="DENY_TOTP")
+        audit("approve", operator, "secure-approve", target=str(app_id), argv=sys.argv[1:], result="DENY_TOTP", extra={"id":_id})
         sys.exit(5)
 
     if not mark_approved(conn, app_id, operator):
         print("Не удалось подтвердить (возможно, статус изменился).")
-        audit("approve", operator, "secure-approve", target=str(app_id), argv=sys.argv[1:], result="RACE_FAIL")
+        audit("approve", operator, "secure-approve", target=str(app_id), argv=sys.argv[1:], result="RACE_FAIL", extra={"id":_id})
         sys.exit(6)
 
     audit("approved", operator, "secure-approve", target=str(app_id), argv=sys.argv[1:], result="OK",
-          extra={"requester": requester, "action": action, "risk": risk})
+          extra={"requester": requester, "action": action, "risk": risk, "id":_id})
 
     # check action and execute
     if action not in ALLOWED_EXEC:
         mark_exec(conn, app_id, "FAILED", f"unknown action {action}")
         audit("exec", operator, "secure-approve", target=str(app_id), result="UNKNOWN_ACTION",
-              extra={"action": action})
+              extra={"action": action, "id":_id})
         print("Неизвестное действие заявки.")
         sys.exit(7)
 
@@ -204,19 +204,19 @@ def main():
         if p.returncode == 0:
             mark_exec(conn, app_id, "EXECUTED", "OK")
             audit("exec", operator, "secure-approve", target=str(app_id), result="EXEC_OK",
-                  extra={"cmd": cmd})
+                  extra={"cmd": cmd, "id":_id})
             print(f"Заявка #{app_id} выполнена.")
             sys.exit(0)
         else:
             mark_exec(conn, app_id, "FAILED", f"rc={p.returncode}")
             audit("exec", operator, "secure-approve", target=str(app_id), result="EXEC_FAIL",
-                  extra={"cmd": cmd, "rc": p.returncode})
+                  extra={"cmd": cmd, "rc": p.returncode, "id":_id})
             print(f"Ошибка выполнения заявки (rc={p.returncode}).")
             sys.exit(p.returncode)
     except Exception as e:
         mark_exec(conn, app_id, "FAILED", f"exc:{e}")
         audit("exec", operator, "secure-approve", target=str(app_id), result="EXEC_EXCEPTION",
-              extra={"cmd": cmd, "err": str(e)})
+              extra={"cmd": cmd, "err": str(e), "id":_id})
         print("Исключение при выполнении.")
         sys.exit(10)
 

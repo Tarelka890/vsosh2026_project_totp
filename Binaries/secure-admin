@@ -231,7 +231,7 @@ def main():
         app_id = int(sys.argv[2])
         requester, action_name, target, argv_list, risk, approver = require_approved(conn, app_id)
 
-        audit("exec", operator, "secure-admin", target=str(app_id),
+        audit("exec", operator, "secure-admin", target=target,
               argv=[str(app_id)], result="RUN_APPROVED",
               extra={"approver": approver, "requester": requester, "saved_argv": argv_list, "approval_id":app_id})
 
