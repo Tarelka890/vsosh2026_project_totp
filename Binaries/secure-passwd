@@ -68,6 +68,20 @@ def init_db():
             PRIMARY KEY(user, action)
         )
     """)
+    c.execute("""CREATE TABLE IF NOT EXISTS approvals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      requester TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target TEXT NOT NULL,
+      argv_json TEXT NOT NULL,
+      risk TEXT NOT NULL,
+      status TEXT NOT NULL,
+      approver TEXT,
+      approved_ts INTEGER,
+      exec_ts INTEGER,
+      exec_result TEXT
+    )""")
     conn.commit()
     return conn
 
